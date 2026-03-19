@@ -604,6 +604,29 @@ input[type="number"].val:focus { outline: none; border-color: var(--accent); }
 
 .tri-limit-warning.hidden { display: none; }
 
+/* ── Amplitude overlap warning ────────────────────────────────────────────────────────────── */
+.amplitude-warning {
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface2));
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  margin-top: 4px;
+  margin-bottom: 2px;
+}
+
+.amplitude-warning.hidden { display: none; }
+
+/* Red highlight on slider + number input when amplitude is dangerously high */
+#amplitude.amp-danger, #amplitude-val.amp-danger {
+  accent-color: var(--danger);
+  border-color: var(--danger);
+  outline: 1px solid var(--danger);
+  color: var(--danger);
+}
+
 /* ── Surface Exclusions panel ────────────────────────────────────────────── */
 
 /* Tool button row */

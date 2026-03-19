@@ -130,6 +130,11 @@
             <option value="2" data-i18n-opt="projection.planarYZ">Planar YZ</option>
           </select>
         </div>
+        <div class="form-row slider-row">
+          <label for="seam-blend" data-i18n="labels.seamBlend" data-i18n-title="tooltips.seamBlend" title="Softens the hard seam where projection faces meet. Effective for Cubic and Cylindrical modes.">Seam Blend ⓘ</label>
+          <input type="range" id="seam-blend" min="0" max="1" step="0.01" value="0.20" />
+          <input type="number" class="val" id="seam-blend-val" value="0.20" min="0" max="1" step="0.01" />
+        </div>
       </section>
 
       <!-- Displacement -->
@@ -140,6 +145,9 @@
           <input type="range" id="amplitude" min="-2" max="2" step="0.01" value="0.5" />
           <input type="number" class="val" id="amplitude-val" value="0.5" min="-100" max="100" step="0.01" />
         </div>
+        <div id="amplitude-warning" class="amplitude-warning hidden" data-i18n="warnings.amplitudeOverlap">
+          ⚠ Amplitude exceeds 10% of the smallest model dimension — geometry overlaps may occur in the exported STL.
+        </div>
       </section>
 
       <!-- Transform -->
@@ -148,8 +156,8 @@
 
         <div class="form-row slider-row">
           <label for="scale-u" data-i18n="labels.scaleU">Scale U</label>
-          <input type="range" id="scale-u" min="0" max="1000" step="1" value="500" />
-          <input type="number" class="val" id="scale-u-val" value="1" min="0.05" max="10" step="0.05" />
+          <input type="range" id="scale-u" min="0" max="1000" step="1" value="435" />
+          <input type="number" class="val" id="scale-u-val" value="0.50" min="0.05" max="10" step="0.05" />
         </div>
         <div class="lock-row">
           <div class="lock-line"></div>
@@ -164,8 +172,8 @@
 
         <div class="form-row slider-row">
           <label for="scale-v" data-i18n="labels.scaleV">Scale V</label>
-          <input type="range" id="scale-v" min="0" max="1000" step="1" value="500" />
-          <input type="number" class="val" id="scale-v-val" value="1" min="0.05" max="10" step="0.05" />
+          <input type="range" id="scale-v" min="0" max="1000" step="1" value="435" />
+          <input type="number" class="val" id="scale-v-val" value="0.50" min="0.05" max="10" step="0.05" />
         </div>
         <div class="form-row slider-row">
           <label for="offset-u" data-i18n="labels.offsetU">Offset U</label>

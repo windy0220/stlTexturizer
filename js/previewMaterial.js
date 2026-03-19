@@ -26,11 +26,16 @@ const vertexShader = /* glsl */`
   varying vec3 vNormal;      // view-space normal     → lighting
 
   void main() {
-    vModelPos    = position;
-    vModelNormal = normalize(normal);
+    vModelPos = position;
+    // Guard against degenerate zero-length normals (non-manifold / multi-body STLs
+    // can produce averaged-to-zero normals at shared vertices between opposing bodies).
+    // normalize(vec3(0)) is undefined in GLSL and produces NaN on most GPUs,
+    // which then turns the entire fragment black.
+    vec3 safeN   = length(normal) > 1e-6 ? normalize(normal) : vec3(0.0, 0.0, 1.0);
+    vModelNormal = safeN;
     vec4 mvPos   = modelViewMatrix * vec4(position, 1.0);
     vViewPos     = mvPos.xyz;
-    vNormal      = normalize(normalMatrix * normal);
+    vNormal      = normalize(normalMatrix * safeN);
     gl_Position  = projectionMatrix * mvPos;
   }
 `;
@@ -49,6 +54,7 @@ const fragmentShader = /* glsl */`
   uniform vec3      boundsCenter;
   uniform float     bottomAngleLimit; // degrees from horizontal; 0 = disabled
   uniform float     topAngleLimit;    // degrees from horizontal; 0 = disabled
+  uniform float     mappingBlend;     // 0 = sharp seams, 1 = fully blended (cylindrical)
 
   varying vec3 vModelPos;
   varying vec3 vModelNormal;
@@ -57,6 +63,14 @@ const fragmentShader = /* glsl */`
 
   const float PI     = 3.14159265358979;
   const float TWO_PI = 6.28318530717959;
+  const float CUBIC_AXIS_EPSILON = 1e-4;
+
+  int dominantCubicAxis(vec3 n) {
+    vec3 absN = abs(n);
+    if (absN.x >= absN.y - CUBIC_AXIS_EPSILON && absN.x >= absN.z - CUBIC_AXIS_EPSILON) return 0;
+    if (absN.y >= absN.z - CUBIC_AXIS_EPSILON) return 1;
+    return 2;
+  }
 
   // Sample after applying scale + tiling
   float sampleMap(vec2 rawUV) {
@@ -73,10 +87,19 @@ const fragmentShader = /* glsl */`
   // Uses vModelPos / vModelNormal (model-space) so UV is stable as the camera orbits.
   float getHeight() {
     vec3 pos = vModelPos;
-    vec3 MN  = vModelNormal;  // model-space normal
+    vec3 MN  = vModelNormal;  // smooth interpolated normal → shading only
     vec3 rel = pos - boundsCenter;
     float maxDim = max(boundsSize.x, max(boundsSize.y, boundsSize.z));
     float md = max(maxDim, 1e-4);
+
+    // Face-stable projection normal: cross product of screen-space position
+    // derivatives is CONSTANT within a triangle (unlike the interpolated
+    // vModelNormal), eliminating within-face texture z-fighting at seam
+    // boundaries in cubic / triplanar mapping. Falls back to MN if degenerate.
+    vec3 _dpx = dFdx(vModelPos);
+    vec3 _dpy = dFdy(vModelPos);
+    vec3 _fN  = cross(_dpx, _dpy);
+    vec3 PN   = length(_fN) > 1e-10 ? normalize(_fN) : MN;
 
     if (mappingMode == 0) {
       return sampleMap(vec2((pos.x - boundsMin.x) / md, (pos.y - boundsMin.y) / md));
@@ -88,27 +111,16 @@ const fragmentShader = /* glsl */`
       return sampleMap(vec2((pos.y - boundsMin.y) / md, (pos.z - boundsMin.z) / md));
 
     } else if (mappingMode == 3) {
-      // Cylindrical around Z axis (Z is up) with automatic caps.
-      //
-      // Side: V is arc-length-normalised (divided by circumference C = 2πr)
-      //   so that scaleU = scaleV gives square, un-stretched texels on the surface.
-      //
-      // Cap (|normalZ| > 0.5): planar XY centred on the cylinder axis, one tile
-      //   fills the diameter × diameter square so the disc looks fully textured.
+      // Cylindrical around Z axis (Z is up) with blendable side↔cap transition.
       float r = max(boundsSize.x, boundsSize.y) * 0.5;
       float C = TWO_PI * max(r, 1e-4);
-      if (abs(vModelNormal.z) > 0.7) {
-        // Cap face — normalise by C so one tile = same world size as on the side
-        return sampleMap(vec2(
-          rel.x / C + 0.5,
-          rel.y / C + 0.5
-        ));
-      }
-      // Side face
-      return sampleMap(vec2(
-        atan(rel.y, rel.x) / TWO_PI + 0.5,
-        (pos.z - boundsMin.z) / C
-      ));
+      float hSide = sampleMap(vec2(atan(rel.y, rel.x) / TWO_PI + 0.5,
+                                   (pos.z - boundsMin.z) / C));
+      if (mappingBlend < 0.001) return hSide;
+      float blendHalf = mappingBlend * 0.20;
+      float capW = smoothstep(0.7 - blendHalf, 0.7 + blendHalf, abs(vModelNormal.z));
+      float hCap  = sampleMap(vec2(rel.x / C + 0.5, rel.y / C + 0.5));
+      return mix(hSide, hCap, capW);
 
     } else if (mappingMode == 4) {
       // Spherical — Z is up
@@ -118,8 +130,8 @@ const fragmentShader = /* glsl */`
       return sampleMap(vec2(theta / TWO_PI + 0.5, phi / PI));
 
     } else if (mappingMode == 5) {
-      // Triplanar – smooth blend using model-space normal (stable regardless of camera)
-      vec3 blend = abs(MN);
+      // Triplanar – smooth blend using face-stable projection normal (constant per triangle)
+      vec3 blend = abs(PN);
       blend = pow(blend, vec3(4.0));
       blend /= dot(blend, vec3(1.0)) + 1e-4;
 
@@ -130,22 +142,22 @@ const fragmentShader = /* glsl */`
       return hXY * blend.z + hXZ * blend.y + hYZ * blend.x;
 
     } else {
-      // Cubic (box) – hard-edge face selection using model-space normal
-      // Picks the single planar projection whose axis is most aligned with the face normal.
-      vec3 absN = abs(MN);
-      if (absN.x >= absN.y && absN.x >= absN.z) {
-        return sampleMap(vec2((pos.y - boundsMin.y) / md, (pos.z - boundsMin.z) / md));
-      } else if (absN.y >= absN.x && absN.y >= absN.z) {
-        return sampleMap(vec2((pos.x - boundsMin.x) / md, (pos.z - boundsMin.z) / md));
-      } else {
-        return sampleMap(vec2((pos.x - boundsMin.x) / md, (pos.y - boundsMin.y) / md));
-      }
+      // Cubic (box) – always pick exactly one projection per triangle.
+      float hYZ = sampleMap(vec2((pos.y - boundsMin.y) / md, (pos.z - boundsMin.z) / md));
+      float hXZ = sampleMap(vec2((pos.x - boundsMin.x) / md, (pos.z - boundsMin.z) / md));
+      float hXY = sampleMap(vec2((pos.x - boundsMin.x) / md, (pos.y - boundsMin.y) / md));
+      int axis = dominantCubicAxis(PN);
+      if (axis == 0) return hYZ;
+      if (axis == 1) return hXZ;
+      return hXY;
     }
   }
 
   void main() {
-    vec3 N = normalize(vNormal);
+    // Flip normal for back faces so flipped-winding geometry still lights correctly.
+    vec3 N = normalize(vNormal) * (gl_FrontFacing ? 1.0 : -1.0);
     float h = getHeight();
+
     // ── Surface angle masking (FDM: suppress texture on near-horizontal faces) ────
     // Use a 15° smoothstep fade above the threshold so the bump tapers gradually
     // into the masked region rather than cutting off abruptly at the boundary edge.
@@ -157,12 +169,11 @@ const fragmentShader = /* glsl */`
     if (vModelNormal.z >= 0.0 && topAngleLimit >= 1.0)
       maskBlend = min(maskBlend, smoothstep(topAngleLimit, topAngleLimit + FADE, surfaceAngle));
     h = mix(0.5, h, maskBlend); // blend toward neutral grey (zero-gradient → no bump)
+
     // ── Bump mapping via screen-space height derivatives ──────────────────
-    // dFdx/dFdy give the height change per screen pixel → height gradient
     float dhx = dFdx(h);
     float dhy = dFdy(h);
 
-    // Screen-space surface tangent / bitangent, projected onto the surface plane
     vec3 dp1 = dFdx(vViewPos);
     vec3 dp2 = dFdy(vViewPos);
 
@@ -173,19 +184,16 @@ const fragmentShader = /* glsl */`
     T = lenT > 1e-5 ? T / lenT : vec3(1.0, 0.0, 0.0);
     B = lenB > 1e-5 ? B / lenB : vec3(0.0, 1.0, 0.0);
 
-    // Normalise bump strength by position derivative so the effect is
-    // independent of zoom level / mesh scale.
+    // Bump strength normalised by screen-space position derivative so
+    // the effect is independent of zoom level.
     float posScale = max(length(dp1) + length(dp2), 1e-6);
-    float bumpStr  = amplitude * 1.2 / posScale;
+    float bumpStr  = amplitude * 6.0 / posScale;
 
-    vec3 bumpN = normalize(N - bumpStr * (dhx * T + dhy * B));
+    vec3 bumpVec = N - bumpStr * (dhx * T + dhy * B);
+    vec3 bumpN = length(bumpVec) > 1e-6 ? normalize(bumpVec) : N;
 
     // ── Shading ───────────────────────────────────────────────────────────
-    // Base colour: cool-to-warm tint driven by the displacement height value
-    // so the texture pattern is clearly visible even without bump lighting.
-    vec3 lo = vec3(0.18, 0.20, 0.35);
-    vec3 hi = vec3(0.90, 0.84, 0.68);
-    vec3 baseColor = mix(lo, hi, h);
+    vec3 baseColor = mix(vec3(0.50, 0.50, 0.50), vec3(0.22, 0.68, 0.68), maskBlend);
 
     vec3 L1 = normalize(vec3( 0.5,  0.8,  1.0));
     vec3 L2 = normalize(vec3(-0.5, -0.2, -0.6));
@@ -195,11 +203,11 @@ const fragmentShader = /* glsl */`
     float diff2 = max(dot(bumpN, L2), 0.0) * 0.35;
 
     vec3 H1   = normalize(L1 + V);
-    float spec = pow(max(dot(bumpN, H1), 0.0), 48.0) * 0.55;
+    float spec = pow(max(dot(bumpN, H1), 0.0), 64.0) * 0.60;
 
-    vec3 color = baseColor * 0.60                                        // strong ambient — texture always visible
-               + baseColor * diff1 * vec3(1.00, 0.97, 0.90) * 0.45      // key light
-               + baseColor * diff2 * vec3(0.40, 0.50, 0.80) * 0.20      // fill light
+    vec3 color = baseColor * 0.55                                        // ambient
+               + baseColor * diff1 * vec3(1.00, 0.96, 0.88) * 0.55      // key light
+               + baseColor * diff2 * vec3(0.80, 0.60, 0.50) * 0.15      // warm fill
                + vec3(spec);                                             // specular
 
     gl_FragColor = vec4(color, 1.0);
@@ -243,6 +251,7 @@ export function updateMaterial(material, displacementTexture, settings) {
   }
   u.bottomAngleLimit.value = settings.bottomAngleLimit ?? 5.0;
   u.topAngleLimit.value    = settings.topAngleLimit    ?? 0.0;
+  u.mappingBlend.value     = settings.mappingBlend     ?? 0.0;
 }
 
 // ── Internal ──────────────────────────────────────────────────────────────────
@@ -265,6 +274,7 @@ function buildUniforms(tex, settings) {
     boundsCenter:     { value: b.center.clone() },
     bottomAngleLimit: { value: settings.bottomAngleLimit ?? 5.0 },
     topAngleLimit:    { value: settings.topAngleLimit    ?? 0.0 },
+    mappingBlend:     { value: settings.mappingBlend     ?? 0.0 },
   };
 }
 

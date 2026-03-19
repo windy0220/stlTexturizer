@@ -50,6 +50,10 @@ export const TRANSLATIONS = {
     'sections.displacement': 'Texture Depth',
     'labels.amplitude':      'Amplitude',
 
+    // Seam blend
+    'labels.seamBlend':              'Seam Blend \u24d8',
+    'tooltips.seamBlend':            'Softens the hard seam where projection faces meet. Effective for Cubic and Cylindrical modes.',
+
     // Surface mask section
     'sections.surfaceMask':          'Surface Mask \u24d8',
     'tooltips.surfaceMask':          '0° = no masking. Surfaces within this angle of horizontal will not be textured.',
@@ -87,6 +91,9 @@ export const TRANSLATIONS = {
     'excl.facesSelected':            '{n} faces selected',
     'excl.hintExclude':              'Excluded surfaces appear orange and will not receive displacement during export.',
     'excl.hintInclude':              'Selected surfaces appear green and will be the only ones to receive displacement during export.',
+
+    // Amplitude overlap warning
+    'warnings.amplitudeOverlap':     '\u26a0 Amplitude exceeds 10% of the smallest model dimension \u2014 geometry overlaps may occur in the exported STL.',
 
     // Export section
     'sections.export':               'Export \u24d8',
@@ -172,6 +179,10 @@ export const TRANSLATIONS = {
     'sections.displacement': 'Texturtiefe',
     'labels.amplitude':      'Amplitude',
 
+    // Seam blend
+    'labels.seamBlend':              'Nahtglättung \u24d8',
+    'tooltips.seamBlend':            'Glättet den scharfen Übergang zwischen Projektionsflächen. Wirksam für Kubische und Zylindrische Modi.',
+
     // Surface mask section
     'sections.surfaceMask':          'Fl\u00e4chenmaskierung nach Winkel\u24d8',
     'tooltips.surfaceMask':          '0° = keine Maskierung. Fl\u00e4chen innerhalb dieses Winkels zur Horizontalen werden nicht texturiert.',
@@ -209,6 +220,9 @@ export const TRANSLATIONS = {
     'excl.facesSelected':            '{n} Fl\u00e4chen ausgew\u00e4hlt',
     'excl.hintExclude':              'Ausgeschlossene Fl\u00e4chen erscheinen orange und erhalten beim Export keine Verschiebung.',
     'excl.hintInclude':              'Ausgew\u00e4hlte Fl\u00e4chen erscheinen gr\u00fcn und sind die einzigen, die beim Export eine Verschiebung erhalten.',
+
+    // Amplitude overlap warning
+    'warnings.amplitudeOverlap':     '\u26a0 Amplitude überschreitet 10% der kleinsten Modellabmessung \u2014 beim Export k\u00f6nnen Geometrie\u00fcberschneidungen auftreten.',
 
     // Export section
     'sections.export':               'Export \u24d8',

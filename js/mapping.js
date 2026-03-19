@@ -13,6 +13,19 @@ export const MODE_TRIPLANAR   = 5;
 export const MODE_CUBIC       = 6;
 
 const TWO_PI = Math.PI * 2;
+const CUBIC_AXIS_EPSILON = 1e-4;
+
+export function getDominantCubicAxis(normal) {
+  const ax = Math.abs(normal.x);
+  const ay = Math.abs(normal.y);
+  const az = Math.abs(normal.z);
+
+  // Treat near-ties as an intentional tie so 45° faces pick one stable axis
+  // instead of flipping projection due to tiny normal jitter between triangles.
+  if (ax >= ay - CUBIC_AXIS_EPSILON && ax >= az - CUBIC_AXIS_EPSILON) return 'x';
+  if (ay >= az - CUBIC_AXIS_EPSILON) return 'y';
+  return 'z';
+}
 
 /**
  * Compute normalised UV coordinates [0, 1) (tiling) for a vertex.
@@ -54,28 +67,42 @@ export function computeUV(pos, normal, mode, settings, bounds) {
     }
 
     case MODE_CYLINDRICAL: {
-      // Cylindrical around Z axis with automatic caps.
-      //
-      // Side: V arc-length-normalised by circumference C = 2πr so that
-      //   scaleU = scaleV gives un-stretched square texels on the surface.
-      //
-      // Cap (|normalZ| > 0.5): planar XY centred on the axis, scaled to the
-      //   diameter so one tile covers the full cap disc.
+      // mappingBlend=0 → pure side projection for all faces (original behaviour, no cap seam).
+      // mappingBlend>0 → smooth side↔cap blend; zone half-width = blend*0.20.
       const r  = Math.max(size.x, size.y) * 0.5;
       const C  = TWO_PI * Math.max(r, 1e-6);
       const rx = pos.x - center.x;
       const ry = pos.y - center.y;
-      if (Math.abs(normal.z) > 0.7) {
-        // Cap face — normalise by C so one tile = same world size as on the side
-        u = rx / C + 0.5;
-        v = ry / C + 0.5;
-      } else {
-        // Side face
-        const theta = Math.atan2(ry, rx);
-        u = (theta / TWO_PI) + 0.5;
-        v = (pos.z - min.z) / C;
+      const blend = settings.mappingBlend ?? 0.0;
+      const theta = Math.atan2(ry, rx);
+      const uSide = (theta / TWO_PI) + 0.5;
+      const vSide = (pos.z - min.z) / C;
+      if (blend <= 0.001) {
+        return applyTransform(uSide, vSide, scaleU, scaleV, offsetU, offsetV, rotRad);
       }
-      break;
+      const blendHalf = blend * 0.20;
+      const absnz = Math.abs(normal.z);
+      const capW = Math.max(0, Math.min(1, (absnz - (0.7 - blendHalf)) / (2 * blendHalf + 1e-6)));
+      if (capW <= 0) {
+        return applyTransform(uSide, vSide, scaleU, scaleV, offsetU, offsetV, rotRad);
+      }
+      const uCap  = rx / C + 0.5;
+      const vCap  = ry / C + 0.5;
+      if (capW >= 1) {
+        return applyTransform(uCap, vCap, scaleU, scaleV, offsetU, offsetV, rotRad);
+      }
+      // Return two separate samples so displacement.js blends the *heights*,
+      // not the UV coordinates (blending atan2-based and planar UVs directly
+      // produces garbage values in the transition zone).
+      const tSide = applyTransform(uSide, vSide, scaleU, scaleV, offsetU, offsetV, rotRad);
+      const tCap  = applyTransform(uCap,  vCap,  scaleU, scaleV, offsetU, offsetV, rotRad);
+      return {
+        triplanar: true,
+        samples: [
+          { u: tSide.u, v: tSide.v, w: 1 - capW },
+          { u: tCap.u,  v: tCap.v,  w: capW },
+        ],
+      };
     }
 
     case MODE_SPHERICAL: {
@@ -91,19 +118,20 @@ export function computeUV(pos, normal, mode, settings, bounds) {
     }
 
     case MODE_CUBIC: {
-      const ax = Math.abs(normal.x);
-      const ay = Math.abs(normal.y);
-      const az = Math.abs(normal.z);
       let uRaw, vRaw;
-      if (ax >= ay && ax >= az) {
-        uRaw = (pos.y - min.y) / md;
-        vRaw = (pos.z - min.z) / md;
-      } else if (ay >= ax && ay >= az) {
-        uRaw = (pos.x - min.x) / md;
-        vRaw = (pos.z - min.z) / md;
-      } else {
-        uRaw = (pos.x - min.x) / md;
-        vRaw = (pos.y - min.y) / md;
+      switch (getDominantCubicAxis(normal)) {
+        case 'x':
+          uRaw = (pos.y - min.y) / md;
+          vRaw = (pos.z - min.z) / md;
+          break;
+        case 'y':
+          uRaw = (pos.x - min.x) / md;
+          vRaw = (pos.z - min.z) / md;
+          break;
+        default:
+          uRaw = (pos.x - min.x) / md;
+          vRaw = (pos.y - min.y) / md;
+          break;
       }
       return applyTransform(uRaw, vRaw, scaleU, scaleV, offsetU, offsetV, rotRad);
     }

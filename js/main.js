@@ -39,8 +39,8 @@ const _raycaster       = new THREE.Raycaster();
 
 const settings = {
   mappingMode:   5,     // Triplanar default
-  scaleU:        1.0,
-  scaleV:        1.0,
+  scaleU:        0.5,
+  scaleV:        0.5,
   amplitude:     0.5,
   offsetU:       0.0,
   offsetV:       0.0,
@@ -50,6 +50,7 @@ const settings = {
   lockScale:     true,
   bottomAngleLimit: 5,
   topAngleLimit:    0,
+  mappingBlend:     0.2,
 };
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
@@ -87,7 +88,8 @@ const offsetUVal   = document.getElementById('offset-u-val');
 const offsetVVal   = document.getElementById('offset-v-val');
 const rotationSlider = document.getElementById('rotation');
 const rotationVal    = document.getElementById('rotation-val');
-const amplitudeVal = document.getElementById('amplitude-val');
+const amplitudeVal      = document.getElementById('amplitude-val');
+const amplitudeWarning  = document.getElementById('amplitude-warning');
 const refineLenVal = document.getElementById('refine-length-val');
 const maxTriVal    = document.getElementById('max-triangles-val');
 
@@ -95,6 +97,8 @@ const bottomAngleLimitSlider = document.getElementById('bottom-angle-limit');
 const topAngleLimitSlider    = document.getElementById('top-angle-limit');
 const bottomAngleLimitVal    = document.getElementById('bottom-angle-limit-val');
 const topAngleLimitVal       = document.getElementById('top-angle-limit-val');
+const seamBlendSlider        = document.getElementById('seam-blend');
+const seamBlendVal           = document.getElementById('seam-blend-val');
 
 // ── Exclusion panel DOM refs ──────────────────────────────────────────────────
 const exclBrushBtn        = document.getElementById('excl-brush-btn');
@@ -160,8 +164,8 @@ scaleVVal.value = posToScale(parseFloat(scaleVSlider.value));
 loadPresets().then(presets => {
   PRESETS = presets;
   buildPresetGrid();
-  // Select Noise as the default preset
-  const noiseIdx = PRESETS.findIndex(p => p.name === 'Noise');
+  // Select Crystal as the default preset
+  const noiseIdx = PRESETS.findIndex(p => p.name === 'Crystal');
   const defaultIdx = noiseIdx !== -1 ? noiseIdx : 0;
   const swatches = presetGrid.querySelectorAll('.preset-swatch');
   if (swatches[defaultIdx]) selectPreset(defaultIdx, swatches[defaultIdx]);
@@ -299,11 +303,13 @@ function wireEvents() {
   linkSlider(offsetUSlider,   offsetUVal,   v => { settings.offsetU   = v; return v.toFixed(2); });
   linkSlider(offsetVSlider,   offsetVVal,   v => { settings.offsetV   = v; return v.toFixed(2); });
   linkSlider(rotationSlider,  rotationVal,  v => { settings.rotation  = v; return Math.round(v); });
-  linkSlider(amplitudeSlider, amplitudeVal, v => { settings.amplitude = v; return v.toFixed(2); });
+  linkSlider(amplitudeSlider, amplitudeVal, v => { settings.amplitude = v; checkAmplitudeWarning(); return v.toFixed(2); });
+  amplitudeVal.addEventListener('change', checkAmplitudeWarning);
   linkSlider(refineLenSlider, refineLenVal, v => { settings.refineLength  = v; return v.toFixed(2); }, false);
   linkSlider(maxTriSlider, maxTriVal, v => { settings.maxTriangles = v; return formatM(v); }, false);
   linkSlider(bottomAngleLimitSlider, bottomAngleLimitVal, v => { settings.bottomAngleLimit = v; return v; });
   linkSlider(topAngleLimitSlider,    topAngleLimitVal,    v => { settings.topAngleLimit    = v; return v; });
+  linkSlider(seamBlendSlider,        seamBlendVal,        v => { settings.mappingBlend     = v; return v.toFixed(2); });
 
   // ── Export ──
   exportBtn.addEventListener('click', () => {
@@ -669,6 +675,7 @@ async function handleSTL(file) {
     currentGeometry = geometry;
     currentBounds   = bounds;
     currentStlName  = file.name.replace(/\.stl$/i, '');
+    checkAmplitudeWarning();
 
     // Dispose old preview material and reset state for the new mesh
     if (previewMaterial) {
@@ -742,6 +749,15 @@ async function handleSTL(file) {
 }
 
 // ── Live preview ──────────────────────────────────────────────────────────────
+
+function checkAmplitudeWarning() {
+  if (!currentBounds) return;
+  const minDim = Math.min(currentBounds.size.x, currentBounds.size.y, currentBounds.size.z);
+  const danger = Math.abs(settings.amplitude) > minDim * 0.1;
+  amplitudeWarning.classList.toggle('hidden', !danger);
+  amplitudeSlider.classList.toggle('amp-danger', danger);
+  amplitudeVal.classList.toggle('amp-danger', danger);
+}
 
 function updatePreview() {
   if (!currentGeometry || !currentBounds) return;

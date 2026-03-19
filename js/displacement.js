@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { computeUV } from './mapping.js';
+import { computeUV, getDominantCubicAxis } from './mapping.js';
 
 /**
  * Apply displacement to every vertex of a non-indexed BufferGeometry.
@@ -58,6 +58,11 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
   // ── Pass 1: accumulate area-weighted face normals per unique position ─────
   // Map: posKey → [nx, ny, nz] (unnormalised sum)
   const smoothNrmMap = new Map();
+  // zoneAreaMap: posKey → [xArea, yArea, zArea]  (cubic mapping only)
+  // Tracks the total adjacent face area in each cubic projection zone (X/Y/Z dominant).
+  // Seam-edge vertices that border two zones get a blend proportional to face area,
+  // eliminating the mixed-projection artefact on seam-crossing triangles.
+  const zoneAreaMap = new Map();
   // maskedFracMap: posKey → [maskedArea, totalArea]
   // Tracks the fraction of surrounding face area that is masked so boundary
   // vertices get a smooth displacement blend instead of a hard on/off cutoff.
@@ -108,6 +113,26 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
     const faceMasked = angleMasked;
     if (userExcluded && userExcludedFaces) userExcludedFaces[t / 3] = 1;
 
+    // For cubic mapping: assign this face's area to its single dominant zone (argmax).
+    // Seam-edge vertices that border two zones still accumulate proportional blending
+    // because those two different adjacent faces each contribute to their own zone.
+    // Using argmax (instead of all-three-components) ensures that a face at exactly 45°
+    // picks one projection consistently, eliminating the double-texture artefact.
+    let czX = 0, czY = 0, czZ = 0;
+    if (settings.mappingMode === 6 && faceArea > 1e-12) {
+      switch (getDominantCubicAxis(faceNrm)) {
+        case 'x':
+          czX = faceArea;
+          break;
+        case 'y':
+          czY = faceArea;
+          break;
+        default:
+          czZ = faceArea;
+          break;
+      }
+    }
+
     for (let v = 0; v < 3; v++) {
       tmpPos.fromBufferAttribute(posAttr, t + v);
       const k = posKey(tmpPos.x, tmpPos.y, tmpPos.z);
@@ -119,6 +144,11 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
         existing[2] += faceNrm.z;
       } else {
         smoothNrmMap.set(k, [faceNrm.x, faceNrm.y, faceNrm.z]);
+      }
+      if (czX > 0 || czY > 0 || czZ > 0) {
+        const za = zoneAreaMap.get(k);
+        if (za) { za[0] += czX; za[1] += czY; za[2] += czZ; }
+        else { zoneAreaMap.set(k, [czX, czY, czZ]); }
       }
       const mf = maskedFracMap.get(k);
       if (mf) {
@@ -145,6 +175,36 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
     if (dispCache.has(k)) continue;
 
     const sn = smoothNrmMap.get(k);
+
+    // Cubic: zone-area-weighted sampling with a stable per-face dominant axis.
+    // Non-seam vertices use their single zone purely; seam-edge vertices that
+    // adjoin two zones get a face-area-proportional blend.  This guarantees all
+    // three vertices of every triangle receive consistent displacement, making
+    // the mesh watertight with no mixed-projection artefact rows at the seam.
+    if (settings.mappingMode === 6 /* MODE_CUBIC */) {
+      const za = zoneAreaMap.get(k);
+      const total = za ? za[0] + za[1] + za[2] : 0;
+      if (total > 0) {
+        const md = Math.max(bounds.size.x, bounds.size.y, bounds.size.z, 1e-6);
+        const rotRad = (settings.rotation ?? 0) * Math.PI / 180;
+        let grey = 0;
+        if (za[0] > 0) { // X-dominant zone → YZ projection
+          const uv = _cubicUV((tmpPos.y-bounds.min.y)/md, (tmpPos.z-bounds.min.z)/md, settings, rotRad);
+          grey += sampleBilinear(imageData.data, imgWidth, imgHeight, uv.u, uv.v) * (za[0]/total);
+        }
+        if (za[1] > 0) { // Y-dominant zone → XZ projection
+          const uv = _cubicUV((tmpPos.x-bounds.min.x)/md, (tmpPos.z-bounds.min.z)/md, settings, rotRad);
+          grey += sampleBilinear(imageData.data, imgWidth, imgHeight, uv.u, uv.v) * (za[1]/total);
+        }
+        if (za[2] > 0) { // Z-dominant zone → XY projection
+          const uv = _cubicUV((tmpPos.x-bounds.min.x)/md, (tmpPos.y-bounds.min.y)/md, settings, rotRad);
+          grey += sampleBilinear(imageData.data, imgWidth, imgHeight, uv.u, uv.v) * (za[2]/total);
+        }
+        dispCache.set(k, grey);
+        continue;
+      }
+    }
+
     tmpNrm.set(sn[0], sn[1], sn[2]);
 
     const uvResult = computeUV(tmpPos, tmpNrm, settings.mappingMode, settings, bounds);
@@ -266,4 +326,18 @@ function sampleBilinear(data, w, h, u, v) {
        + v10 * tx * (1-ty)
        + v01 * (1-tx) * ty
        + v11 * tx * ty;
+}
+
+/** Apply scale/offset/rotation to raw UV for cubic projection.
+ *  Mirrors the private applyTransform helper in mapping.js. */
+function _cubicUV(rawU, rawV, settings, rotRad) {
+  let u = rawU / settings.scaleU + settings.offsetU;
+  let v = rawV / settings.scaleV + settings.offsetV;
+  if (rotRad !== 0) {
+    const c = Math.cos(rotRad), s = Math.sin(rotRad);
+    u -= 0.5; v -= 0.5;
+    const ru = c*u - s*v, rv = s*u + c*v;
+    u = ru + 0.5; v = rv + 0.5;
+  }
+  return { u: u - Math.floor(u), v: v - Math.floor(v) };
 }
