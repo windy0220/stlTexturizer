@@ -53,6 +53,7 @@ const settings = {
   topAngleLimit:    0,
   mappingBlend:     1,
   seamBandWidth:    0.5,
+  capAngle:         20,
   symmetricDisplacement: false,
   useDisplacement: false,
 };
@@ -111,6 +112,9 @@ const seamBlendSlider        = document.getElementById('seam-blend');
 const seamBlendVal           = document.getElementById('seam-blend-val');
 const seamBandWidthSlider    = document.getElementById('seam-band-width');
 const seamBandWidthVal       = document.getElementById('seam-band-width-val');
+const capAngleSlider         = document.getElementById('cap-angle');
+const capAngleVal            = document.getElementById('cap-angle-val');
+const capAngleRow            = document.getElementById('cap-angle-row');
 const symmetricDispToggle    = document.getElementById('symmetric-displacement');
 const dispPreviewToggle      = document.getElementById('displacement-preview');
 
@@ -279,6 +283,7 @@ function wireEvents() {
   // ── Settings ──
   mappingSelect.addEventListener('change', () => {
     settings.mappingMode = parseInt(mappingSelect.value, 10);
+    capAngleRow.style.display = settings.mappingMode === 3 ? '' : 'none';
     updatePreview();
   });
 
@@ -332,6 +337,7 @@ function wireEvents() {
   linkSlider(topAngleLimitSlider,    topAngleLimitVal,    v => { settings.topAngleLimit    = v; return v; });
   linkSlider(seamBlendSlider,        seamBlendVal,        v => { settings.mappingBlend     = v; return v.toFixed(2); });
   linkSlider(seamBandWidthSlider,    seamBandWidthVal,    v => { settings.seamBandWidth    = v; return v.toFixed(2); });
+  linkSlider(capAngleSlider,          capAngleVal,          v => { settings.capAngle         = v; return Math.round(v); });
   symmetricDispToggle.addEventListener('change', () => {
     settings.symmetricDisplacement = symmetricDispToggle.checked;
     updatePreview();
@@ -1046,6 +1052,7 @@ async function handleSTL(file) {
       if (swatches.length > 0) swatches[0].classList.add('active');
     }
     mappingSelect.value = String(settings.mappingMode);
+    capAngleRow.style.display = settings.mappingMode === 3 ? '' : 'none';
 
     // Show mesh with a default material until a map is selected
     loadGeometry(geometry);

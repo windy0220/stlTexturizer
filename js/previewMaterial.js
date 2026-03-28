@@ -35,6 +35,7 @@ const sharedGLSL = /* glsl */`
   uniform float     topAngleLimit;
   uniform float     mappingBlend;
   uniform float     seamBandWidth;
+  uniform float     capAngle;
   uniform int       symmetricDisplacement;
   uniform int       useDisplacement;
 
@@ -110,19 +111,49 @@ const sharedGLSL = /* glsl */`
     } else if (mappingMode == 3) {
       float r = max(boundsSize.x, boundsSize.y) * 0.5;
       float C = TWO_PI * max(r, 1e-4);
-      float hSide = sampleMap(vec2(atan(rel.y, rel.x) / TWO_PI + 0.5,
-                                   (pos.z - boundsMin.z) / C));
+      float u_cyl = atan(rel.y, rel.x) / TWO_PI + 0.5;
+      float v_cyl = (pos.z - boundsMin.z) / C;
+
+      // Seam smoothing: cross-fade between left-side and right-side texture
+      // continuations at the atan2 wrap point. Each side samples the texture
+      // with a smoothly varying UV (no discontinuity), preserving full detail.
+      float seamBand = seamBandWidth * 0.1;
+      float seamDist = min(u_cyl, 1.0 - u_cyl);
+      float hSide;
+      if (seamBand > 0.001 && seamDist < seamBand) {
+        float d = u_cyl < 0.5 ? u_cyl : u_cyl - 1.0;
+        float t = smoothstep(0.0, 1.0, (d + seamBand) / (2.0 * seamBand));
+        float hLeft  = sampleMap(vec2(1.0 + d, v_cyl));
+        float hRight = sampleMap(vec2(d, v_cyl));
+        hSide = mix(hLeft, hRight, t);
+      } else {
+        hSide = sampleMap(vec2(u_cyl, v_cyl));
+      }
+
       if (mappingBlend < 0.001) return hSide;
-      float blendHalf = mappingBlend * 0.20;
-      float capW = smoothstep(0.7 - blendHalf, 0.7 + blendHalf, abs(blendN.z));
+      float capThreshold = cos(radians(capAngle));
+      float blendHalf = seamBandWidth * 0.5;
+      float capW = smoothstep(capThreshold - blendHalf, capThreshold + blendHalf, abs(blendN.z));
       float hCap  = sampleMap(vec2(rel.x / C + 0.5, rel.y / C + 0.5));
       return mix(hSide, hCap, capW);
 
     } else if (mappingMode == 4) {
       float r     = length(rel);
       float phi   = acos(clamp(rel.z / max(r, 1e-4), -1.0, 1.0));
-      float theta = atan(rel.y, rel.x);
-      return sampleMap(vec2(theta / TWO_PI + 0.5, phi / PI));
+      float u_sph = atan(rel.y, rel.x) / TWO_PI + 0.5;
+      float v_sph = phi / PI;
+
+      // Seam smoothing: cross-fade at the atan2 wrap
+      float seamBand = seamBandWidth * 0.1;
+      float seamDist = min(u_sph, 1.0 - u_sph);
+      if (seamBand > 0.001 && seamDist < seamBand) {
+        float d = u_sph < 0.5 ? u_sph : u_sph - 1.0;
+        float t = smoothstep(0.0, 1.0, (d + seamBand) / (2.0 * seamBand));
+        float hLeft  = sampleMap(vec2(1.0 + d, v_sph));
+        float hRight = sampleMap(vec2(d, v_sph));
+        return mix(hLeft, hRight, t);
+      }
+      return sampleMap(vec2(u_sph, v_sph));
 
     } else if (mappingMode == 5) {
       vec3 blend = abs(projN);
@@ -321,6 +352,7 @@ export function updateMaterial(material, displacementTexture, settings) {
   u.topAngleLimit.value    = settings.topAngleLimit    ?? 0.0;
   u.mappingBlend.value            = settings.mappingBlend            ?? 0.0;
   u.seamBandWidth.value           = settings.seamBandWidth           ?? 0.35;
+  u.capAngle.value                = settings.capAngle                ?? 20.0;
   u.symmetricDisplacement.value   = settings.symmetricDisplacement   ? 1 : 0;
   u.useDisplacement.value         = settings.useDisplacement         ? 1 : 0;
 }
@@ -347,6 +379,7 @@ function buildUniforms(tex, settings) {
     topAngleLimit:    { value: settings.topAngleLimit    ?? 0.0 },
     mappingBlend:             { value: settings.mappingBlend            ?? 0.0 },
     seamBandWidth:            { value: settings.seamBandWidth            ?? 0.35 },
+    capAngle:                 { value: settings.capAngle                 ?? 20.0 },
     symmetricDisplacement:    { value: settings.symmetricDisplacement   ? 1 : 0 },
     useDisplacement:          { value: settings.useDisplacement         ? 1 : 0 },
   };

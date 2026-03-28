@@ -133,41 +133,66 @@ export function computeUV(pos, normal, mode, settings, bounds) {
 
     case MODE_CYLINDRICAL: {
       // mappingBlend=0 → pure side projection for all faces (original behaviour, no cap seam).
-      // mappingBlend>0 → smooth side↔cap blend; zone half-width = blend*0.20.
+      // mappingBlend>0 → smooth side↔cap blend.
       const r  = Math.max(size.x, size.y) * 0.5;
       const C  = TWO_PI * Math.max(r, 1e-6);
       const rx = pos.x - center.x;
       const ry = pos.y - center.y;
       const blend = settings.mappingBlend ?? 0.0;
       const theta = Math.atan2(ry, rx);
-      const uSide = (theta / TWO_PI) + 0.5;
+      const uRaw = (theta / TWO_PI) + 0.5;
       const vSide = (pos.z - min.z) / C;
+
+      // Seam smoothing: cross-fade between left-side and right-side texture
+      // continuations at the atan2 wrap. Both sides use smoothly varying UVs
+      // (shifted by ±1.0 in raw space), preserving full texture detail.
+      const seamBand = (settings.seamBandWidth ?? 0.5) * 0.1;
+      const seamDist = Math.min(uRaw, 1.0 - uRaw);
+      const inSeamZone = seamBand > 0.001 && seamDist < seamBand;
+
+      let sideSamples;
+      if (inSeamZone) {
+        const d = uRaw < 0.5 ? uRaw : uRaw - 1.0;
+        const tRaw = (d + seamBand) / (2.0 * seamBand);
+        const t = tRaw * tRaw * (3 - 2 * tRaw); // smoothstep
+        const tLeft  = applyTransform(1.0 + d, vSide, scaleU, scaleV, offsetU, offsetV, rotRad);
+        const tRight = applyTransform(d,       vSide, scaleU, scaleV, offsetU, offsetV, rotRad);
+        sideSamples = [
+          { u: tRight.u, v: tRight.v, w: t },
+          { u: tLeft.u,  v: tLeft.v,  w: 1 - t },
+        ];
+      } else {
+        const tSide = applyTransform(uRaw, vSide, scaleU, scaleV, offsetU, offsetV, rotRad);
+        sideSamples = [{ u: tSide.u, v: tSide.v, w: 1 }];
+      }
+
       if (blend <= 0.001) {
-        return applyTransform(uSide, vSide, scaleU, scaleV, offsetU, offsetV, rotRad);
+        if (sideSamples.length === 1 && sideSamples[0].w === 1) return sideSamples[0];
+        return { triplanar: true, samples: sideSamples };
       }
-      const blendHalf = blend * 0.20;
+
+      const capThreshold = Math.cos((settings.capAngle ?? 20) * Math.PI / 180);
+      const blendHalf = (settings.seamBandWidth ?? 0.5) * 0.5;
       const absnz = Math.abs(normal.z);
-      const capW = Math.max(0, Math.min(1, (absnz - (0.7 - blendHalf)) / (2 * blendHalf + 1e-6)));
+      const capW = Math.max(0, Math.min(1, (absnz - (capThreshold - blendHalf)) / (2 * blendHalf + 1e-6)));
+
       if (capW <= 0) {
-        return applyTransform(uSide, vSide, scaleU, scaleV, offsetU, offsetV, rotRad);
+        if (sideSamples.length === 1 && sideSamples[0].w === 1) return sideSamples[0];
+        return { triplanar: true, samples: sideSamples };
       }
+
       const uCap  = rx / C + 0.5;
       const vCap  = ry / C + 0.5;
+      const tCap = applyTransform(uCap, vCap, scaleU, scaleV, offsetU, offsetV, rotRad);
+
       if (capW >= 1) {
-        return applyTransform(uCap, vCap, scaleU, scaleV, offsetU, offsetV, rotRad);
+        return tCap;
       }
-      // Return two separate samples so displacement.js blends the *heights*,
-      // not the UV coordinates (blending atan2-based and planar UVs directly
-      // produces garbage values in the transition zone).
-      const tSide = applyTransform(uSide, vSide, scaleU, scaleV, offsetU, offsetV, rotRad);
-      const tCap  = applyTransform(uCap,  vCap,  scaleU, scaleV, offsetU, offsetV, rotRad);
-      return {
-        triplanar: true,
-        samples: [
-          { u: tSide.u, v: tSide.v, w: 1 - capW },
-          { u: tCap.u,  v: tCap.v,  w: capW },
-        ],
-      };
+
+      // Combine seam-blended side samples with cap sample
+      const samples = sideSamples.map(s => ({ u: s.u, v: s.v, w: s.w * (1 - capW) }));
+      samples.push({ u: tCap.u, v: tCap.v, w: capW });
+      return { triplanar: true, samples };
     }
 
     case MODE_SPHERICAL: {
@@ -177,8 +202,29 @@ export function computeUV(pos, normal, mode, settings, bounds) {
       const r  = Math.sqrt(rx*rx + ry*ry + rz*rz);
       const phi   = Math.acos(Math.max(-1, Math.min(1, rz / Math.max(r, 1e-6)))); // [0, PI], Z is up
       const theta = Math.atan2(ry, rx);              // [-PI, PI]
-      u = (theta / TWO_PI) + 0.5;
-      v = phi / Math.PI;
+      const uRaw = (theta / TWO_PI) + 0.5;
+      const vRaw = phi / Math.PI;
+
+      // Seam smoothing: cross-fade at the atan2 wrap
+      const seamBand = (settings.seamBandWidth ?? 0.5) * 0.1;
+      const seamDist = Math.min(uRaw, 1.0 - uRaw);
+      if (seamBand > 0.001 && seamDist < seamBand) {
+        const d = uRaw < 0.5 ? uRaw : uRaw - 1.0;
+        const tRaw = (d + seamBand) / (2.0 * seamBand);
+        const t = tRaw * tRaw * (3 - 2 * tRaw); // smoothstep
+        const tLeft  = applyTransform(1.0 + d, vRaw, scaleU, scaleV, offsetU, offsetV, rotRad);
+        const tRight = applyTransform(d,       vRaw, scaleU, scaleV, offsetU, offsetV, rotRad);
+        return {
+          triplanar: true,
+          samples: [
+            { u: tRight.u, v: tRight.v, w: t },
+            { u: tLeft.u,  v: tLeft.v,  w: 1 - t },
+          ],
+        };
+      }
+
+      u = uRaw;
+      v = vRaw;
       break;
     }
 
