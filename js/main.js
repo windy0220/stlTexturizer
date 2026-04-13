@@ -3,7 +3,8 @@ import { initViewer, loadGeometry, setMeshMaterial, setMeshGeometry, setWirefram
          getControls, getCamera, getCurrentMesh,
          setExclusionOverlay, setHoverPreview, setViewerTheme,
          setProjection, requestRender,
-         clearDiagOverlays, setDiagEdges, addDiagFaces } from './viewer.js';
+         clearDiagOverlays, setDiagEdges, addDiagFaces,
+         setRotationGizmo, isGizmoDragging } from './viewer.js';
 import { loadModelFile, computeBounds, getTriangleCount }  from './stlLoader.js';
 import { loadAllThumbnails, loadFullPreset, loadCustomTexture, IMAGE_PRESETS }  from './presetTextures.js';
 import { createPreviewMaterial, updateMaterial } from './previewMaterial.js';
@@ -47,6 +48,9 @@ let isPainting         = false;
 let selectionMode      = false;       // false = exclude painted faces; true = include only painted faces
 let _lastHoverTriIdx   = -1;          // last triangle index used for hover preview
 let placeOnFaceActive  = false;       // true while "Place on Face" mode is active
+let rotateActive       = false;       // true while rotate mode is active
+let rotateAngles       = { x: 0, y: 0, z: 0 };  // accumulated rotation in degrees
+let _rotateOriginalPositions = null;  // Float32Array snapshot before any rotation
 const _raycaster       = new THREE.Raycaster();
 let _lastPaintHitPoint = null;        // THREE.Vector3 — last brush paint position for shift-line
 let _shiftLineMesh     = null;        // THREE.Line — preview line from last paint to cursor
@@ -201,6 +205,13 @@ const triLimitWarning  = document.getElementById('tri-limit-warning');
 const wireframeToggle  = document.getElementById('wireframe-toggle');
 const projectionToggle = document.getElementById('projection-toggle');
 const placeOnFaceBtn   = document.getElementById('place-on-face-btn');
+const rotateBtn        = document.getElementById('rotate-btn');
+const rotateControls   = document.getElementById('rotate-controls');
+const rotateXInput     = document.getElementById('rotate-x');
+const rotateYInput     = document.getElementById('rotate-y');
+const rotateZInput     = document.getElementById('rotate-z');
+const rotateApplyBtn   = document.getElementById('rotate-apply-btn');
+const rotateResetBtn   = document.getElementById('rotate-reset-btn');
 
 const mappingSelect   = document.getElementById('mapping-mode');
 const scaleUSlider    = document.getElementById('scale-u');
@@ -661,6 +672,41 @@ function wireEvents() {
     togglePlaceOnFace(!placeOnFaceActive);
   });
 
+  // ── Rotate ──
+  rotateBtn.addEventListener('click', () => {
+    toggleRotateMode(!rotateActive);
+  });
+  rotateApplyBtn.addEventListener('click', () => {
+    applyRotationFromInputs();
+    toggleRotateMode(false);
+  });
+  rotateResetBtn.addEventListener('click', () => {
+    if (!currentGeometry || !_rotateOriginalPositions) return;
+
+    // Restore original vertex positions
+    currentGeometry.attributes.position.array.set(_rotateOriginalPositions);
+    currentGeometry.attributes.position.needsUpdate = true;
+    currentGeometry.computeVertexNormals();
+    if (currentGeometry.attributes.faceNormal) {
+      currentGeometry.deleteAttribute('faceNormal');
+    }
+
+    rotateAngles = { x: 0, y: 0, z: 0 };
+    rotateXInput.value = '0';
+    rotateYInput.value = '0';
+    rotateZInput.value = '0';
+
+    // Light update only — still in rotate mode
+    setMeshGeometry(currentGeometry);
+    requestRender();
+  });
+  // Allow Enter key in inputs to apply
+  [rotateXInput, rotateYInput, rotateZInput].forEach(inp => {
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') applyRotationFromInputs();
+    });
+  });
+
   // ── License ──
   licenseLink.addEventListener('click', () => { licenseOverlay.classList.remove('hidden'); trapFocus(licenseOverlay); });
   licenseClose.addEventListener('click', () => licenseOverlay.classList.add('hidden'));
@@ -823,6 +869,9 @@ function wireEvents() {
   canvas.addEventListener('mousedown', (e) => {
     if (!currentGeometry || e.button !== 0) return;
 
+    // Rotation gizmo takes priority
+    if (isGizmoDragging()) return;
+
     // Place on Face mode
     if (placeOnFaceActive) {
       e.preventDefault();
@@ -925,6 +974,7 @@ function wireEvents() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (rotateActive) toggleRotateMode(false);
       if (placeOnFaceActive) togglePlaceOnFace(false);
       if (exclusionTool) setExclusionTool(null);
       licenseOverlay.classList.add('hidden');
@@ -962,8 +1012,9 @@ function setExclusionTool(tool) {
   // Clicking the active tool toggles it off; passing null always deactivates
   exclusionTool = (exclusionTool === tool) ? null : tool;
 
-  // Deactivate place-on-face if an exclusion tool is being activated
+  // Deactivate place-on-face and rotate if an exclusion tool is being activated
   if (exclusionTool && placeOnFaceActive) togglePlaceOnFace(false);
+  if (exclusionTool && rotateActive) toggleRotateMode(false);
 
   // Exit 3D displacement preview when a masking tool is activated
   if (exclusionTool && settings.useDisplacement) {
@@ -1297,6 +1348,8 @@ function togglePlaceOnFace(active) {
   if (active) {
     // Deactivate exclusion tool
     if (exclusionTool) setExclusionTool(null);
+    // Deactivate rotate mode
+    if (rotateActive) toggleRotateMode(false);
     // Deactivate precision masking (geometry will be rotated/replaced)
     if (precisionMaskingEnabled) deactivatePrecisionMasking();
     canvas.style.cursor = 'crosshair';
@@ -1440,6 +1493,156 @@ function handlePlaceOnFaceClick(e) {
 
   // Exit place-on-face mode
   togglePlaceOnFace(false);
+}
+
+// ── Rotate Mode ──────────────────────────────────────────────────────────────
+
+function toggleRotateMode(active) {
+  rotateActive = active;
+  rotateBtn.classList.toggle('active', active);
+  rotateControls.classList.toggle('hidden', !active);
+
+  if (active) {
+    // Deactivate conflicting modes
+    if (placeOnFaceActive) togglePlaceOnFace(false);
+    if (exclusionTool) setExclusionTool(null);
+
+    // Snapshot original positions for reset
+    if (currentGeometry) {
+      _rotateOriginalPositions = new Float32Array(currentGeometry.attributes.position.array);
+    }
+    rotateAngles = { x: 0, y: 0, z: 0 };
+    rotateXInput.value = '0'; rotateYInput.value = '0'; rotateZInput.value = '0';
+
+    // Show gizmo
+    setRotationGizmo(true, handleGizmoDrag);
+  } else {
+    setRotationGizmo(false);
+    _rotateOriginalPositions = null;
+
+    // Full rebuild now that rotation is done
+    _rotateFinalize();
+  }
+}
+
+function handleGizmoDrag(axis, deltaDegrees) {
+  if (!currentGeometry) return;
+
+  // Accumulate the angle
+  rotateAngles[axis] = ((rotateAngles[axis] || 0) + deltaDegrees) % 360;
+
+  // Update input fields
+  rotateXInput.value = Math.round(rotateAngles.x * 100) / 100;
+  rotateYInput.value = Math.round(rotateAngles.y * 100) / 100;
+  rotateZInput.value = Math.round(rotateAngles.z * 100) / 100;
+
+  // Apply incremental rotation to geometry
+  applyIncrementalRotation(axis, THREE.MathUtils.degToRad(deltaDegrees));
+}
+
+function applyIncrementalRotation(axis, radians) {
+  const quat = new THREE.Quaternion();
+  if (axis === 'x') quat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), radians);
+  else if (axis === 'y') quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), radians);
+  else quat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), radians);
+
+  _rotateGeometry(quat);
+}
+
+function applyRotationFromInputs() {
+  if (!currentGeometry) return;
+
+  const targetX = parseFloat(rotateXInput.value) || 0;
+  const targetY = parseFloat(rotateYInput.value) || 0;
+  const targetZ = parseFloat(rotateZInput.value) || 0;
+
+  // Compute delta from current accumulated angles
+  const dx = targetX - rotateAngles.x;
+  const dy = targetY - rotateAngles.y;
+  const dz = targetZ - rotateAngles.z;
+
+  if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 && Math.abs(dz) < 0.001) return;
+
+  // Apply as Euler XYZ rotation delta
+  const euler = new THREE.Euler(
+    THREE.MathUtils.degToRad(dx),
+    THREE.MathUtils.degToRad(dy),
+    THREE.MathUtils.degToRad(dz),
+    'XYZ',
+  );
+  const quat = new THREE.Quaternion().setFromEuler(euler);
+
+  rotateAngles.x = targetX;
+  rotateAngles.y = targetY;
+  rotateAngles.z = targetZ;
+
+  _rotateGeometry(quat);
+}
+
+function _rotateGeometry(quat) {
+  const pos = currentGeometry.attributes.position.array;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.length; i += 3) {
+    v.set(pos[i], pos[i + 1], pos[i + 2]);
+    v.applyQuaternion(quat);
+    pos[i]     = v.x;
+    pos[i + 1] = v.y;
+    pos[i + 2] = v.z;
+  }
+
+  // Recompute normals
+  currentGeometry.computeVertexNormals();
+  if (currentGeometry.attributes.faceNormal) {
+    currentGeometry.deleteAttribute('faceNormal');
+  }
+
+  currentGeometry.attributes.position.needsUpdate = true;
+  if (currentGeometry.attributes.normal) {
+    currentGeometry.attributes.normal.needsUpdate = true;
+  }
+
+  // Light update only: swap geometry on mesh, no camera/grid/dimension rebuild
+  setMeshGeometry(currentGeometry);
+  requestRender();
+}
+
+function _rotateFinalize() {
+  if (!currentGeometry) return;
+
+  // Re-center
+  currentGeometry.computeBoundingBox();
+  const center = new THREE.Vector3();
+  currentGeometry.boundingBox.getCenter(center);
+  currentGeometry.translate(-center.x, -center.y, -center.z);
+  currentGeometry.attributes.position.needsUpdate = true;
+
+  // Full refresh
+  currentBounds = computeBounds(currentGeometry);
+  loadGeometry(currentGeometry);
+
+  // Rebuild adjacency for exclusion tools
+  const adjData = buildAdjacency(currentGeometry);
+  triangleAdjacency = adjData.adjacency;
+  triangleCentroids = adjData.centroids;
+  triangleBoundRadii = adjData.boundRadii;
+  buildSpatialGrid(triangleCentroids, currentGeometry.attributes.position.count / 3, currentBounds);
+
+  // Rebuild exclusion overlay
+  if (excludedFaces.size > 0) {
+    refreshExclusionOverlay();
+  } else {
+    setExclusionOverlay(null);
+  }
+
+  // Dispose old preview material so it gets recreated
+  if (previewMaterial) {
+    previewMaterial.dispose();
+    previewMaterial = null;
+  }
+
+  checkAmplitudeWarning();
+  checkResolutionWarning();
+  updatePreview();
 }
 
 function refreshExclusionOverlay() {
@@ -1721,6 +1924,9 @@ function loadDefaultCube() {
   eraseMode         = false;
   isPainting        = false;
   if (placeOnFaceActive) togglePlaceOnFace(false);
+  if (rotateActive) toggleRotateMode(false);
+  rotateAngles = { x: 0, y: 0, z: 0 };
+  rotateXInput.value = '0'; rotateYInput.value = '0'; rotateZInput.value = '0';
   exclBrushBtn.classList.remove('active');
   exclBucketBtn.classList.remove('active');
   exclBrushTypeRow.classList.add('hidden');
@@ -1840,6 +2046,9 @@ async function handleModelFile(file) {
     eraseMode         = false;
     isPainting        = false;
     if (placeOnFaceActive) togglePlaceOnFace(false);
+    if (rotateActive) toggleRotateMode(false);
+    rotateAngles = { x: 0, y: 0, z: 0 };
+    rotateXInput.value = '0'; rotateYInput.value = '0'; rotateZInput.value = '0';
     exclBrushBtn.classList.remove('active');
     exclBucketBtn.classList.remove('active');
     exclBrushTypeRow.classList.add('hidden');
@@ -1923,6 +2132,7 @@ function applyDiagSeverity() {
   }
   meshDiagnostics.classList.remove('diag-ok', 'diag-warn', 'diag-error');
   meshDiagnostics.classList.add('diag-' + severity);
+  meshDiagnostics.classList.toggle('diag-corner-tr', severity !== 'ok');
 }
 
 function clearDiagHighlight() {
