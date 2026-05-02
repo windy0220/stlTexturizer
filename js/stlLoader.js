@@ -144,6 +144,46 @@ export function getTriangleCount(geometry) {
 }
 
 /**
+ * Total surface area of a geometry, in the same units as the position attribute.
+ * Sums ½‖(v1 − v0) × (v2 − v0)‖ over every triangle.  Handles both indexed and
+ * non-indexed BufferGeometries.
+ */
+export function computeSurfaceArea(geometry) {
+  const posAttr = geometry.attributes.position;
+  if (!posAttr) return 0;
+  const pos = posAttr.array;
+  const idx = geometry.index ? geometry.index.array : null;
+  let area = 0;
+
+  const get = (vi, out) => {
+    const o = vi * 3;
+    out[0] = pos[o]; out[1] = pos[o + 1]; out[2] = pos[o + 2];
+  };
+  const a = [0, 0, 0], b = [0, 0, 0], c = [0, 0, 0];
+
+  const triCount = idx ? idx.length / 3 : pos.length / 9;
+  for (let t = 0; t < triCount; t++) {
+    if (idx) {
+      get(idx[t * 3],     a);
+      get(idx[t * 3 + 1], b);
+      get(idx[t * 3 + 2], c);
+    } else {
+      const o = t * 9;
+      a[0] = pos[o];     a[1] = pos[o + 1]; a[2] = pos[o + 2];
+      b[0] = pos[o + 3]; b[1] = pos[o + 4]; b[2] = pos[o + 5];
+      c[0] = pos[o + 6]; c[1] = pos[o + 7]; c[2] = pos[o + 8];
+    }
+    const e1x = b[0] - a[0], e1y = b[1] - a[1], e1z = b[2] - a[2];
+    const e2x = c[0] - a[0], e2y = c[1] - a[1], e2z = c[2] - a[2];
+    const cx = e1y * e2z - e1z * e2y;
+    const cy = e1z * e2x - e1x * e2z;
+    const cz = e1x * e2y - e1y * e2x;
+    area += 0.5 * Math.sqrt(cx * cx + cy * cy + cz * cz);
+  }
+  return area;
+}
+
+/**
  * Load an OBJ from a File object.
  * Returns { geometry, bounds }.
  */

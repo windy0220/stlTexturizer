@@ -6,6 +6,7 @@ import { initViewer, loadGeometry, setMeshMaterial, setMeshGeometry, setWirefram
          clearDiagOverlays, setDiagEdges, addDiagFaces,
          setRotationGizmo, isGizmoDragging } from './viewer.js';
 import { loadModelFile, computeBounds, getTriangleCount }  from './stlLoader.js';
+import { computeSmartResolution } from './smartResolution.js';
 import { loadAllThumbnails, loadFullPreset, loadCustomTexture, IMAGE_PRESETS }  from './presetTextures.js';
 import { createPreviewMaterial, updateMaterial } from './previewMaterial.js';
 import { subdivide }          from './subdivision.js';
@@ -268,6 +269,8 @@ const amplitudeWarning  = document.getElementById('amplitude-warning');
 const invertDisplacementCheckbox = document.getElementById('invert-displacement');
 const refineLenVal = document.getElementById('refine-length-val');
 const resolutionWarning = document.getElementById('resolution-warning');
+const smartResBtn  = document.getElementById('smart-res-btn');
+const smartResInfo = document.getElementById('smart-res-info');
 const maxTriVal    = document.getElementById('max-triangles-val');
 
 const bottomAngleLimitSlider = document.getElementById('bottom-angle-limit');
@@ -1374,7 +1377,15 @@ function wireEvents() {
     updatePreview();
   });
   linkSlider(boundaryFalloffSlider, boundaryFalloffVal, v => { settings.boundaryFalloff = v; _falloffDirty = true; return v.toFixed(1); });
-  linkSlider(refineLenSlider, refineLenVal, v => { settings.refineLength  = v; checkResolutionWarning(); return v.toFixed(2); }, false);
+  linkSlider(refineLenSlider, refineLenVal, v => {
+    settings.refineLength = v;
+    checkResolutionWarning();
+    // Diagnostic from a previous Smart click no longer matches the new value.
+    // (applySmartResolution sets values without dispatching `input`, so this
+    // only fires when the user drags or types — exactly what we want.)
+    if (smartResInfo) smartResInfo.classList.add('hidden');
+    return v.toFixed(2);
+  }, false);
   refineLenVal.addEventListener('change', checkResolutionWarning);
   linkSlider(maxTriSlider, maxTriVal, v => { settings.maxTriangles = v; return formatM(v); }, false);
   linkSlider(bottomAngleLimitSlider, bottomAngleLimitVal, v => { settings.bottomAngleLimit = v; _falloffDirty = true; return v; });
@@ -2312,6 +2323,7 @@ function handlePlaceOnFaceClick(e) {
   exportBtn.disabled = (activeMapEntry === null);
   export3mfBtn.disabled = (activeMapEntry === null);
   bakeBtn.disabled = (activeMapEntry === null);
+  updateSmartResBtnState();
   updatePreview();
 
   // Rebuild exclusion overlay with new vertex positions (face indices unchanged)
@@ -2810,6 +2822,7 @@ function loadDefaultCube() {
   exportBtn.disabled = (activeMapEntry === null);
   export3mfBtn.disabled = (activeMapEntry === null);
   bakeBtn.disabled = (activeMapEntry === null);
+  updateSmartResBtnState();
   updatePreview();
 }
 
@@ -2950,6 +2963,7 @@ async function handleModelFile(file) {
 
     exportBtn.disabled = (activeMapEntry === null);
     export3mfBtn.disabled = (activeMapEntry === null);
+    updateSmartResBtnState();
     updatePreview();
   } catch (err) {
     console.error('Failed to load model:', err);
@@ -3140,6 +3154,57 @@ function checkResolutionWarning() {
   refineLenSlider.classList.toggle('res-warn', tooCoarse);
   refineLenVal.classList.toggle('res-warn', tooCoarse);
 }
+
+/**
+ * Smart resolution: pick a refineLength based on the active texture's detail
+ * and the model's surface area, capped to fit the triangle budget.  Run on
+ * demand (button) so the result reflects the most up-to-date texture, mapping,
+ * and geometry — i.e. the state the export pipeline will actually consume.
+ */
+function applySmartResolution() {
+  if (!currentGeometry || !currentBounds || !activeMapEntry) return;
+  // Use the smoothing-blurred ImageData when textureSmoothing > 0 — that's
+  // the data the export pipeline actually samples, and a heavily blurred
+  // texture has lower gradients → lower PPE → coarser recommended edge.
+  const effective = getEffectiveMapEntry() || activeMapEntry;
+  const result = computeSmartResolution({
+    geometry: currentGeometry,
+    bounds:   currentBounds,
+    settings,
+    texture:  effective,
+  });
+  if (!result) return;
+
+  // Programmatic .value assignments don't fire input events, so set directly
+  // — no live-preview refresh needed (refineLength only affects export).
+  settings.refineLength = result.edge;
+  refineLenSlider.value = result.edge;
+  refineLenVal.value    = result.edge;
+  checkResolutionWarning();
+
+  const d = result.diagnostics;
+  const triLabel = d.estTriangles >= 1e6
+    ? `${(d.estTriangles / 1e6).toFixed(1)} M`
+    : `${(d.estTriangles / 1e3).toFixed(0)} k`;
+  const clampedNote = d.budgetClamped
+    ? ` <span class="clamped">[${t('ui.smartResBudgetCapped')}]</span>`
+    : '';
+  smartResInfo.innerHTML = t('ui.smartResInfo', {
+    edge: result.edge.toFixed(2),
+    ppe:  d.pixelsPerEdge.toFixed(1),
+    pix:  d.pixMm.toFixed(3),
+    area: (d.surfaceArea / 100).toFixed(0),  // cm²
+    tris: triLabel,
+  }) + clampedNote;
+  smartResInfo.classList.remove('hidden');
+}
+
+function updateSmartResBtnState() {
+  if (!smartResBtn) return;
+  smartResBtn.disabled = !(currentGeometry && activeMapEntry);
+}
+
+if (smartResBtn) smartResBtn.addEventListener('click', applySmartResolution);
 
 /**
  * Set (or update) the `faceMask` vertex attribute on a geometry.
@@ -3759,6 +3824,7 @@ function updatePreview() {
     exportBtn.disabled = true;
     export3mfBtn.disabled = true;
     bakeBtn.disabled = true;
+    updateSmartResBtnState();
     return;
   }
 
@@ -3785,6 +3851,7 @@ function updatePreview() {
   exportBtn.disabled = false;
   export3mfBtn.disabled = false;
   bakeBtn.disabled = isBaking;
+  updateSmartResBtnState();
 }
 
 // ── Displacement preview ──────────────────────────────────────────────────────
@@ -4857,6 +4924,7 @@ function adoptBakedGeometry(geometry, bounds, opts = {}) {
   exportBtn.disabled = (activeMapEntry === null);
   export3mfBtn.disabled = (activeMapEntry === null);
   bakeBtn.disabled = (activeMapEntry === null);
+  updateSmartResBtnState();
 
   updatePreview();
 
