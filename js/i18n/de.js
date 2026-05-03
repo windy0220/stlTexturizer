@@ -121,7 +121,7 @@ export default {
   "labels.resolution": "Auflösung (mm)",
   "tooltips.resolution": "Kanten länger als dieser Wert werden beim Export unterteilt",
   "warnings.resolutionTooCoarse": "⚠ Die Auflösung ist gröber als 1/100 der Modelldiagonale — feine Details gehen verloren. Verringere den Wert für feinere Ergebnisse.",
-  "labels.smartRes": "Werte vorschlagen",
+  "labels.smartRes": "Werte vorschlagen (nach Belieben anpassen)",
   "tooltips.smartRes": "Setzt Auflösung und Max Dreiecke passend zum Detailgrad der aktiven Textur, zur Oberfläche des Modells und zur Verschiebungsamplitude.",
   "ui.smartResInfo": "Smart: <b>{edge} mm</b> · max. <b>{tris}</b> Dreiecke · PPE {ppe} · Pixel {pix} mm · Oberfläche {area} cm²",
   "ui.smartResBudgetCapped": "Speicher-Limit",

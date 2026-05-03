@@ -118,7 +118,7 @@ export default {
   "labels.resolution": "解像度 (mm)",
   "tooltips.resolution": "この値より長いエッジはエクスポート時に分割されます",
   "warnings.resolutionTooCoarse": "⚠ 解像度がモデルのバウンディングボックス対角線の1/100より粗いです — 細かいディテールが失われます。より細かい結果を得るには値を下げてください。",
-  "labels.smartRes": "推奨値を設定",
+  "labels.smartRes": "推奨値を設定（お好みで調整）",
   "tooltips.smartRes": "アクティブなテクスチャの精細さ、モデル表面積、変位の振幅に基づいて解像度と最大三角形数を設定します。",
   "ui.smartResInfo": "Smart: <b>{edge} mm</b> · 最大 <b>{tris}</b> 三角形 · PPE {ppe} · ピクセル {pix} mm · 表面 {area} cm²",
   "ui.smartResBudgetCapped": "メモリ上限",

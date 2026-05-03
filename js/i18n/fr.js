@@ -118,7 +118,7 @@ export default {
   "labels.resolution": "Résolution (mm)",
   "tooltips.resolution": "Les arêtes plus longues que cette valeur seront divisées lors de l'exportation",
   "warnings.resolutionTooCoarse": "⚠ La résolution est plus grossière que 1/100 de la diagonale de la boîte englobante du modèle — les détails fins seront perdus. Réduisez la valeur pour des résultats plus fins.",
-  "labels.smartRes": "Suggérer des valeurs",
+  "labels.smartRes": "Suggérer des valeurs (à ajuster selon votre goût)",
   "tooltips.smartRes": "Règle la résolution et le nombre max de triangles selon le niveau de détail de la texture active, la surface du modèle et l'amplitude du déplacement.",
   "ui.smartResInfo": "Smart : <b>{edge} mm</b> · max <b>{tris}</b> tri · PPE {ppe} · pixel {pix} mm · surface {area} cm²",
   "ui.smartResBudgetCapped": "limite mémoire",

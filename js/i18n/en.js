@@ -121,7 +121,7 @@ export default {
   "labels.resolution": "Resolution (mm)",
   "tooltips.resolution": "Edges longer than this value will be split during export",
   "warnings.resolutionTooCoarse": "⚠ Resolution is coarser than 1/100 of the model's bounding box diagonal — fine details will be lost. Lower the value for finer results.",
-  "labels.smartRes": "Suggest values",
+  "labels.smartRes": "Suggest values (change to taste)",
   "tooltips.smartRes": "Set Resolution and Max Triangles based on the active texture's detail, the model's surface area, and the displacement amplitude.",
   "ui.smartResInfo": "Smart: <b>{edge} mm</b> · max <b>{tris}</b> tri · PPE {ppe} · pixel {pix} mm · surface {area} cm²",
   "ui.smartResBudgetCapped": "OOM-capped",

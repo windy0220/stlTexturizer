@@ -118,7 +118,7 @@ export default {
   "labels.resolution": "Risoluzione (mm)",
   "tooltips.resolution": "I bordi più lunghi di questo valore verranno suddivisi durante l'esportazione",
   "warnings.resolutionTooCoarse": "⚠ La risoluzione è più grossolana di 1/100 della diagonale del riquadro di delimitazione del modello — i dettagli fini andranno persi. Riduci il valore per risultati più fini.",
-  "labels.smartRes": "Suggerisci valori",
+  "labels.smartRes": "Suggerisci valori (modifica a piacere)",
   "tooltips.smartRes": "Imposta risoluzione e triangoli massimi in base al livello di dettaglio della texture attiva, alla superficie del modello e all'ampiezza dello spostamento.",
   "ui.smartResInfo": "Smart: <b>{edge} mm</b> · max <b>{tris}</b> tri · PPE {ppe} · pixel {pix} mm · superficie {area} cm²",
   "ui.smartResBudgetCapped": "limite di memoria",

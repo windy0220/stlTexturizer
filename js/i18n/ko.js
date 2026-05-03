@@ -118,7 +118,7 @@ export default {
   "labels.resolution": "해상도 (mm)",
   "tooltips.resolution": "이 값보다 긴 에지는 내보내기 중 분할됩니다",
   "warnings.resolutionTooCoarse": "⚠ 해상도가 모델 바운딩 박스 대각선의 1/100보다 거칠어 미세 디테일이 손실됩니다. 더 세밀한 결과를 원하시면 값을 낮추세요.",
-  "labels.smartRes": "값 제안",
+  "labels.smartRes": "값 제안 (취향대로 조정)",
   "tooltips.smartRes": "활성 텍스처의 정밀도, 모델 표면적, 변위 진폭에 따라 해상도와 최대 삼각형 수를 설정합니다.",
   "ui.smartResInfo": "Smart: <b>{edge} mm</b> · 최대 <b>{tris}</b> 삼각형 · PPE {ppe} · 픽셀 {pix} mm · 표면 {area} cm²",
   "ui.smartResBudgetCapped": "메모리 한도",
