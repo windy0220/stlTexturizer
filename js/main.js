@@ -81,6 +81,11 @@ const settings = {
   mappingBlend:     1,
   seamBandWidth:    0.5,
   textureSmoothing: 0,
+  // Laplacian smoothing iterations applied to the per-vertex blend normal
+  // (only the normal that drives projection-direction blend weights — not
+  // the displacement direction). 0 = off, 4–8 = noticeable seam smoothing,
+  // higher = diminishing returns and risk of losing macro orientation.
+  blendNormalSmoothing: 32,
   capAngle:         20,
   boundaryFalloff:  0,
   symmetricDisplacement: false,

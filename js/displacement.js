@@ -208,6 +208,88 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
     smoothNrmX[id] *= inv; smoothNrmY[id] *= inv; smoothNrmZ[id] *= inv;
   }
 
+  // ── Pass 1.5: Laplacian-smoothed BLEND normal ─────────────────────────────
+  // The displacement direction (Pass 3) must remain the accurate per-vertex
+  // smooth normal — otherwise watertight copies of the same position move
+  // differently and you get cracks. But the normal used to derive
+  // *projection-direction blend weights* only needs to vary slowly across
+  // the surface. On organic / sculpted meshes the smooth normal still has
+  // high-frequency jitter (a few degrees vertex-to-vertex). Inside the
+  // blend band (where ∂w/∂n is largest) that jitter multiplies the
+  // difference between two unrelated heightmap samples (hA - hB), producing
+  // visible seam noise even when the underlying texture is not at fault.
+  //
+  // Smoothing the blend normal kills this amplification at the source. On a
+  // sphere the smoothing is a no-op (already smooth); on a noisy surface it
+  // damps the jitter that drives ∂w. Direction info is preserved because we
+  // re-normalise after each iteration.
+  const blendNrmIters = Math.max(0, Math.floor(settings.blendNormalSmoothing ?? 0));
+  let blendNrmX = smoothNrmX, blendNrmY = smoothNrmY, blendNrmZ = smoothNrmZ;
+  if (blendNrmIters > 0) {
+    // Build dedup-graph adjacency in CSR form: each triangle contributes
+    // 3 directed edges; we build a multigraph (duplicates keep their natural
+    // weight from how often two positions share an edge — i.e., shared
+    // surfaces accumulate higher coupling, which is what we want).
+    // For each unique-vertex id, neighbors[csrStart[id]..csrStart[id+1])
+    // is the contiguous slice of neighbour ids.
+    const degree = new Uint32Array(uniqueCount);
+    for (let t = 0; t < count; t += 3) {
+      const a = vertexId[t], b = vertexId[t + 1], c = vertexId[t + 2];
+      if (a !== b) { degree[a]++; degree[b]++; }
+      if (b !== c) { degree[b]++; degree[c]++; }
+      if (c !== a) { degree[c]++; degree[a]++; }
+    }
+    const csrStart = new Uint32Array(uniqueCount + 1);
+    for (let id = 0; id < uniqueCount; id++) csrStart[id + 1] = csrStart[id] + degree[id];
+    const totalEdges = csrStart[uniqueCount];
+    const neighbors = new Uint32Array(totalEdges);
+    const cursor = new Uint32Array(uniqueCount);
+    for (let t = 0; t < count; t += 3) {
+      const a = vertexId[t], b = vertexId[t + 1], c = vertexId[t + 2];
+      if (a !== b) { neighbors[csrStart[a] + cursor[a]++] = b; neighbors[csrStart[b] + cursor[b]++] = a; }
+      if (b !== c) { neighbors[csrStart[b] + cursor[b]++] = c; neighbors[csrStart[c] + cursor[c]++] = b; }
+      if (c !== a) { neighbors[csrStart[c] + cursor[c]++] = a; neighbors[csrStart[a] + cursor[a]++] = c; }
+    }
+
+    // Laplacian smoothing on a writable copy. Read from current, write to
+    // next, swap. Each iteration: average over neighbours, re-normalise.
+    let curX = new Float64Array(smoothNrmX);
+    let curY = new Float64Array(smoothNrmY);
+    let curZ = new Float64Array(smoothNrmZ);
+    let nxtX = new Float64Array(uniqueCount);
+    let nxtY = new Float64Array(uniqueCount);
+    let nxtZ = new Float64Array(uniqueCount);
+
+    for (let iter = 0; iter < blendNrmIters; iter++) {
+      for (let id = 0; id < uniqueCount; id++) {
+        const s = csrStart[id], e = csrStart[id + 1];
+        if (e === s) {
+          nxtX[id] = curX[id]; nxtY[id] = curY[id]; nxtZ[id] = curZ[id];
+          continue;
+        }
+        let sx = 0, sy = 0, sz = 0;
+        for (let k = s; k < e; k++) {
+          const nb = neighbors[k];
+          sx += curX[nb]; sy += curY[nb]; sz += curZ[nb];
+        }
+        const inv = 1 / (e - s);
+        sx *= inv; sy *= inv; sz *= inv;
+        const len = Math.sqrt(sx*sx + sy*sy + sz*sz);
+        if (len > 1e-12) {
+          const r = 1 / len;
+          nxtX[id] = sx * r; nxtY[id] = sy * r; nxtZ[id] = sz * r;
+        } else {
+          // Neighbour normals cancelled (knife-edge) — keep current.
+          nxtX[id] = curX[id]; nxtY[id] = curY[id]; nxtZ[id] = curZ[id];
+        }
+      }
+      const tx = curX, ty = curY, tz = curZ;
+      curX = nxtX; curY = nxtY; curZ = nxtZ;
+      nxtX = tx;   nxtY = ty;   nxtZ = tz;
+    }
+    blendNrmX = curX; blendNrmY = curY; blendNrmZ = curZ;
+  }
+
   // ── Boundary falloff distance field ──────────────────────────────────────────
   // When boundaryFalloff > 0, identify boundary positions (vertices adjacent to
   // both masked and unmasked faces, or on the user-exclusion seam) and compute
@@ -360,7 +442,7 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
 
       let wX = 0, wY = 0, wZ = 0;
       if (smoothNrmReliability[vid] > 0.5) {
-        const sn = { x: smoothNrmX[vid], y: smoothNrmY[vid], z: smoothNrmZ[vid] };
+        const sn = { x: blendNrmX[vid], y: blendNrmY[vid], z: blendNrmZ[vid] };
         const w = getCubicBlendWeights(sn, cubicBlend, cubicBandWidth);
         wX = w.x; wY = w.y; wZ = w.z;
       } else {
@@ -371,6 +453,11 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
 
       if (wX + wY + wZ > 0) {
         let grey = 0;
+        // U-flip uses the *original* smoothNrm — it's a discrete sign decision
+        // about which face of the cube this vertex sits on. The smoothed blend
+        // normal can have small components flip sign during Laplacian smoothing
+        // (e.g. for vertices near the equator x≈0), which would mirror their
+        // texture sample relative to the true surface orientation.
         if (wX > 0) { // X-dominant → YZ projection
           let rawU = (tmpPos.y-bounds.min.y)/md;
           if (smoothNrmX[vid] < 0) rawU = -rawU;
@@ -394,7 +481,12 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
       }
     }
 
-    tmpNrm.set(smoothNrmX[vid], smoothNrmY[vid], smoothNrmZ[vid]);
+    // Triplanar / cylindrical seam blends use the SMOOTHED blend normal so
+    // adjacent vertices in a blend zone don't see jittery weights driven by
+    // mesh-noise. Other modes ignore the normal for blending, so this is a
+    // no-op there. Displacement direction (Pass 3) stays on the unsmoothed
+    // smooth normal — only blend weights change here.
+    tmpNrm.set(blendNrmX[vid], blendNrmY[vid], blendNrmZ[vid]);
 
     const uvResult = computeUV(tmpPos, tmpNrm, settings.mappingMode, settingsWithAspect, bounds);
     let grey;
